@@ -1,0 +1,543 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Albumer — Seleccionador local de fotos</title>
+<style>
+  :root { --bg:#0f1115; --card:#181b22; --fg:#e6e8ef; --muted:#9aa0b4; --accent:#5b8cff; --ok:#3dd68c; --warn:#f5a623; --err:#ff5c6a; }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:system-ui,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--fg);}
+  header{padding:20px 24px;border-bottom:1px solid #2a2e3a;display:flex;align-items:center;gap:12px;}
+  header h1{margin:0;font-size:20px;}
+  header .sub{color:var(--muted);font-size:13px;}
+  main{max-width:1100px;margin:0 auto;padding:24px;}
+  .card{background:var(--card);border:1px solid #2a2e3a;border-radius:12px;padding:20px;margin-bottom:20px;}
+  label{display:block;margin-bottom:6px;font-size:13px;color:var(--muted);}
+  input[type=text],textarea{width:100%;padding:10px 12px;border-radius:8px;border:1px solid #3a3f4d;background:#0f1115;color:var(--fg);font-size:14px;}
+  textarea{min-height:90px;resize:vertical;}
+  .row{display:flex;gap:12px;flex-wrap:wrap;align-items:end;}
+  .row > div{flex:1;min-width:220px;}
+  button{background:var(--accent);color:#fff;border:none;border-radius:8px;padding:10px 16px;font-size:14px;cursor:pointer;font-weight:600;}
+  button.secondary{background:#2a2e3a;color:var(--fg);}
+  button.danger{background:var(--err);}
+  button:disabled{opacity:.5;cursor:not-allowed;}
+  .progress{margin-top:12px;}
+  .bar{height:8px;background:#2a2e3a;border-radius:4px;overflow:hidden;}
+  .bar > div{height:100%;background:var(--accent);width:0%;transition:width .2s;}
+  .status{font-size:13px;color:var(--muted);margin-top:6px;}
+  table{width:100%;border-collapse:collapse;font-size:13px;}
+  th,td{padding:8px 10px;border-bottom:1px solid #2a2e3a;text-align:left;}
+  th{color:var(--muted);font-weight:600;}
+  .tag{display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;background:#2a2e3a;margin-right:4px;}
+  .tag.ok{background:#1f3a2c;color:var(--ok);}
+  .tag.warn{background:#3a2f1f;color:var(--warn);}
+  .score{font-variant-numeric:tabular-nums;}
+  .log{font-family:ui-monospace,monospace;font-size:12px;background:#0a0c10;padding:10px;border-radius:8px;max-height:160px;overflow:auto;white-space:pre-wrap;}
+  .info{font-size:12px;color:var(--muted);margin-top:8px;}
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>Albumer</h1>
+    <div class="sub">Seleccionador local de fotos con IA (CLIP). Sin APIs, sin tokens, todo en tu máquina.</div>
+  </div>
+</header>
+<main>
+  <div class="card">
+    <h2 style="margin:0 0 12px;font-size:16px;">1. Configuración</h2>
+    <div class="row">
+      <div>
+        <label>Carpeta con fotos</label>
+        <input type="text" id="folder" placeholder="D:\fotos" />
+      </div>
+      <div style="flex:0 0 140px;">
+        <label>Umbral (0-1)</label>
+        <input type="text" id="threshold" value="0.20" />
+      </div>
+      <div style="flex:0 0 200px;">
+        <label>Modo</label>
+        <select id="mode" style="width:100%;padding:10px 12px;border-radius:8px;border:1px solid #3a3f4d;background:#0f1115;color:var(--fg);font-size:14px;">
+          <option value="best" selected>Mejor coincidencia</option>
+          <option value="all">Todas las que superen umbral</option>
+        </select>
+      </div>
+    </div>
+    <div style="margin-top:12px;">
+      <label>Criterios (uno por línea). Ej: perro, gato, paisaje, familia</label>
+      <textarea id="criteria" placeholder="perro\ngato\npaisaje"></textarea>
+    </div>
+    <div class="info">Los criterios se usan como etiquetas para CLIP. Mejor en inglés si el modelo no reconoce bien el español (ej: dog, cat, landscape).</div>
+    <div style="margin-top:14px;display:flex;gap:10px;flex-wrap:wrap;">
+      <button id="btnClassify">Clasificar (sin mover aún)</button>
+      <button id="btnApply" class="danger" disabled>Aplicar: mover fotos</button>
+    </div>
+    <div class="progress" id="progWrap" style="display:none;">
+      <div class="bar"><div id="bar"></div></div>
+      <div class="status" id="status"></div>
+    </div>
+  </div>
+
+  <div class="card" id="resultsCard" style="display:none;">
+    <h2 style="margin:0 0 12px;font-size:16px;">2. Resultado de clasificación</h2>
+    <div id="summary" class="status" style="margin-bottom:10px;"></div>
+    <div style="overflow:auto;max-height:420px;">
+      <table>
+        <thead><tr><th>Archivo</th><th>Puntuaciones</th><th>Destino</th></tr></thead>
+        <tbody id="tbody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2 style="margin:0 0 12px;font-size:16px;">3. Clasificación manual por voz</h2>
+    <div class="info">Recorré las fotos de la carpeta y decidí a qué subcarpeta mover cada una diciendo el nombre en voz alta. Se actualiza en tiempo real: las fotos ya movidas desaparecen de la lista.</div>
+    <div style="margin:10px 0;display:flex;gap:10px;flex-wrap:wrap;align-items:end;">
+      <button id="btnLoadManual" class="secondary">Cargar fotos de la carpeta</button>
+      <div style="flex:1;min-width:200px;">
+        <label>Destino (voz o texto)</label>
+        <input type="text" id="destVoice" placeholder="ej: perro, familia, descartes" list="folderList" />
+        <datalist id="folderList"></datalist>
+      </div>
+      <button id="btnMic" class="secondary">🎤 Hablar</button>
+      <button id="btnMoveManual" class="danger" disabled>Mover y siguiente</button>
+      <button id="btnSkipManual" class="secondary">Saltar</button>
+    </div>
+    <div id="manualStatus" class="status" style="margin-bottom:8px;"></div>
+    <div style="display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap;">
+      <div style="flex:0 0 260px;">
+        <img id="manualPreview" alt="" style="width:100%;max-height:220px;object-fit:contain;background:#0a0c10;border-radius:8px;border:1px solid #2a2e3a;display:none;" />
+        <div id="manualName" class="status" style="word-break:break-all;"></div>
+      </div>
+      <div style="flex:1;min-width:240px;">
+        <div id="manualCounter" class="status"></div>
+        <div class="log" id="manualLog" style="max-height:160px;"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2 style="margin:0 0 12px;font-size:16px;">4. Duplicados</h2>
+    <div class="info">Detecta fotos con imagen igual o muy similar (aunque tengan distinto nombre) usando huella perceptiva (dHash). Luego revisá los grupos y decidí: eliminar, mover o conservar.</div>
+    <div style="margin:10px 0;display:flex;gap:10px;flex-wrap:wrap;align-items:end;">
+      <div style="flex:0 0 160px;">
+        <label>Umbral (0-64)</label>
+        <input type="text" id="dupThreshold" value="10" />
+      </div>
+      <button id="btnDetectDup">Detectar duplicados</button>
+      <button id="btnReviewDup" class="secondary" disabled>Revisar grupos</button>
+      <div id="dupStatus" class="status" style="flex:1;min-width:200px;"></div>
+    </div>
+    <div style="overflow:auto;max-height:240px;">
+      <table>
+        <thead><tr><th>Grupo</th><th>Cant.</th><th>Archivos</th></tr></thead>
+        <tbody id="dupTableBody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card" id="dupReviewCard" style="display:none;">
+    <h2 style="margin:0 0 12px;font-size:16px;">Revisión de duplicados</h2>
+    <div id="dupGroupInfo" class="status" style="margin-bottom:10px;"></div>
+    <div id="dupImages" style="display:flex;gap:14px;flex-wrap:wrap;justify-content:center;"></div>
+    <div style="margin-top:12px;display:flex;gap:10px;flex-wrap:wrap;align-items:end;">
+      <div style="flex:1;min-width:200px;">
+        <label>Mover imagen a carpeta</label>
+        <input type="text" id="dupDest" placeholder="ej: duplicados, descartes" list="folderList" />
+      </div>
+      <button id="btnDupPrev" class="secondary">Anterior grupo</button>
+      <button id="btnDupNext" class="secondary">Siguiente grupo</button>
+      <button id="btnDupExit" class="secondary">Salir de revisión</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2 style="margin:0 0 12px;font-size:16px;">Log</h2>
+    <div class="log" id="log"></div>
+  </div>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+let lastPlan = null;
+
+function log(msg){ const el=$('log'); el.textContent += msg + '\n'; el.scrollTop = el.scrollHeight; }
+
+$('btnClassify').addEventListener('click', async () => {
+  const folder = $('folder').value.trim();
+  const critLines = $('criteria').value.split(/\n/).map(s=>s.trim()).filter(Boolean);
+  const threshold = parseFloat($('threshold').value) || 0.2;
+  const mode = $('mode').value;
+  if(!folder){ alert('Indicá la carpeta'); return; }
+  if(critLines.length===0){ alert('Indicá al menos un criterio'); return; }
+
+  $('btnClassify').disabled = true;
+  $('btnApply').disabled = true;
+  $('progWrap').style.display = 'block';
+  $('bar').style.width = '0%';
+  $('status').textContent = 'Cargando modelo (primera vez descarga ~150MB)...';
+  $('resultsCard').style.display = 'none';
+  lastPlan = null;
+
+  try {
+    const resp = await fetch('/api/classify', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ folder, criteria: critLines, threshold, mode })
+    });
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    while(true){
+      const {done, value} = await reader.read();
+      if(done) break;
+      buffer += decoder.decode(value, {stream:true});
+      const parts = buffer.split('\n\n');
+      buffer = parts.pop();
+      for(const p of parts){
+        if(!p.startsWith('data:')) continue;
+        const obj = JSON.parse(p.slice(5).trim());
+        if(obj.type==='start'){
+          log(`Inicio: ${obj.total} imágenes. Criterios: ${obj.criteria.join(', ')}`);
+        } else if(obj.type==='progress'){
+          const pct = obj.total ? (obj.current/obj.total*100) : 0;
+          $('bar').style.width = pct.toFixed(1)+'%';
+          $('status').textContent = `${obj.current}/${obj.total} — ${obj.file} → ${obj.best||'sin clasificar'} (${obj.bestScore})`;
+        } else if(obj.type==='done'){
+          lastPlan = obj;
+          renderResults(obj);
+          log(`Clasificación terminada. ${obj.results.length} imágenes.`);
+        } else if(obj.type==='error'){
+          log('ERROR: ' + obj.message);
+          alert('Error: ' + obj.message);
+        }
+      }
+    }
+  } catch(e){
+    log('ERROR: ' + e.message);
+    alert('Error: ' + e.message);
+  } finally {
+    $('btnClassify').disabled = false;
+  }
+});
+
+function renderResults(plan){
+  $('resultsCard').style.display = 'block';
+  const tbody = $('tbody');
+  tbody.innerHTML = '';
+  let classified = 0;
+  const counts = {};
+  for(const r of plan.results){
+    if(r.targetFolders && r.targetFolders.length) classified++;
+    for(const f of r.targetFolders){ counts[f] = (counts[f]||0)+1; }
+    const scoresHtml = r.scores.map(s => {
+      const cls = s.score >= plan.threshold ? 'tag ok' : 'tag';
+      return `<span class="${cls}">${escapeHtml(s.criterion)} <span class="score">${s.score}</span></span>`;
+    }).join(' ');
+    const dest = (r.targetFolders && r.targetFolders.length) ? r.targetFolders.join(', ') : '<span style="color:var(--muted)">sin clasificar</span>';
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${escapeHtml(r.image)}</td><td>${scoresHtml}</td><td>${dest}</td>`;
+    tbody.appendChild(tr);
+  }
+  const summary = Object.entries(counts).map(([k,v])=>`${k}: ${v}`).join(' | ') || 'sin clasificar';
+  $('summary').textContent = `Clasificadas: ${classified}/${plan.results.length}. Distribución: ${summary}`;
+  $('btnApply').disabled = classified===0;
+}
+
+$('btnApply').addEventListener('click', async () => {
+  if(!lastPlan){ alert('Primero clasificá'); return; }
+  if(!confirm('Se moverán los archivos a las subcarpetas. ¿Continuar?')) return;
+  $('btnApply').disabled = true;
+  log('Aplicando cambios...');
+  try {
+    const resp = await fetch('/api/apply', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({
+        baseFolder: lastPlan.baseFolder,
+        results: lastPlan.results.map(r => ({ fullPath: r.fullPath, targetFolders: r.targetFolders })),
+        folderNames: lastPlan.folderNames
+      })
+    });
+    const data = await resp.json();
+    log(`Movidos: ${data.movedCount}. Errores: ${data.errors.length}.`);
+    if(data.errors.length){ log(JSON.stringify(data.errors, null, 2)); }
+    if(data.createdFolders && data.createdFolders.length){
+      log('Carpetas creadas: ' + data.createdFolders.join(', '));
+    }
+    // Actualizar lista real en tiempo real: sacar las movidas del plan
+    if (lastPlan && lastPlan.results) {
+      lastPlan.results = lastPlan.results.filter((r) => !(r.targetFolders && r.targetFolders.length));
+      renderResults(lastPlan);
+    }
+    await loadManualImages();
+    alert(`Listo. Movidos ${data.movedCount} archivos. Errores: ${data.errors.length}.`);
+  } catch(e){
+    log('ERROR: ' + e.message);
+    alert('Error: ' + e.message);
+  } finally {
+    $('btnApply').disabled = false;
+  }
+});
+
+// ----- Clasificacion manual por voz -----
+let manualImages = [];
+let manualIndex = 0;
+let manualFolders = [];
+
+function manualLogMsg(msg){ const el=document.getElementById('manualLog'); el.textContent += msg + '\\n'; el.scrollTop = el.scrollHeight; }
+
+async function loadManualImages(){
+  const folder = document.getElementById('folder').value.trim();
+  if(!folder){ alert('Indicá la carpeta'); return; }
+  try {
+    const r = await fetch('/api/images', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({folder})});
+    const data = await r.json();
+    if(data.error){ manualLogMsg('Error: '+data.error); return; }
+    manualImages = data.images || [];
+    manualFolders = data.subfolders || [];
+    manualIndex = 0;
+    // poblar datalist
+    const dl = document.getElementById('folderList');
+    dl.innerHTML = '';
+    for(const f of manualFolders){
+      const o = document.createElement('option'); o.value = f; dl.appendChild(o);
+    }
+    renderManualCurrent();
+    manualLogMsg(`Cargadas ${manualImages.length} fotos. Subcarpetas: ${manualFolders.join(', ')||'(ninguna)'}`);
+  } catch(e){
+    manualLogMsg('Error: '+e.message);
+  }
+}
+
+function renderManualCurrent(){
+  const total = manualImages.length;
+  const status = document.getElementById('manualStatus');
+  const counter = document.getElementById('manualCounter');
+  const nameEl = document.getElementById('manualName');
+  const preview = document.getElementById('manualPreview');
+  if(total === 0){
+    status.textContent = 'No hay fotos por clasificar en la carpeta.';
+    counter.textContent = '';
+    nameEl.textContent = '';
+    preview.style.display = 'none';
+    document.getElementById('btnMoveManual').disabled = true;
+    return;
+  }
+  if(manualIndex >= total){ manualIndex = total - 1; }
+  if(manualIndex < 0) manualIndex = 0;
+  const img = manualImages[manualIndex];
+  counter.textContent = `Foto ${manualIndex+1} de ${total}`;
+  nameEl.textContent = (dupSet.has(img.fullPath) ? '🔁 ' : '') + img.name;
+  preview.src = '/api/file?path=' + encodeURIComponent(img.fullPath);
+  preview.style.display = 'block';
+  document.getElementById('destVoice').value = '';
+  document.getElementById('btnMoveManual').disabled = false;
+  status.textContent = `Actual: ${img.name}`;
+}
+
+async function moveManualCurrent(){
+  if(manualImages.length === 0) return;
+  const dest = document.getElementById('destVoice').value.trim();
+  if(!dest){ alert('Indicá el destino (voz o texto).'); return; }
+  const img = manualImages[manualIndex];
+  const btn = document.getElementById('btnMoveManual');
+  btn.disabled = true;
+  try {
+    const r = await fetch('/api/move-one', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({fullPath: img.fullPath, destName: dest})});
+    const data = await r.json();
+    if(data.error){ manualLogMsg('Error: '+data.error); btn.disabled=false; return; }
+    manualLogMsg(`Movido: ${img.name} -> ${data.folder}`);
+    // quitar de lista en tiempo real
+    manualImages.splice(manualIndex, 1);
+    if(manualIndex >= manualImages.length) manualIndex = Math.max(0, manualImages.length-1);
+    // actualizar subcarpetas sugeridas
+    if (manualFolders.indexOf(data.folder) < 0) manualFolders.push(data.folder);
+    const dl = document.getElementById('folderList');
+    dl.innerHTML = '';
+    for(const f of manualFolders){ const o=document.createElement('option'); o.value=f; dl.appendChild(o); }
+    renderManualCurrent();
+  } catch(e){
+    manualLogMsg('Error: '+e.message);
+    btn.disabled = false;
+  }
+}
+
+function skipManual(){ if(manualImages.length===0) return; manualIndex = (manualIndex+1) % manualImages.length; renderManualCurrent(); }
+
+function startVoiceDest(){
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if(!SR){ alert('Tu navegador no soporta reconocimiento de voz. Usá Chrome o Edge.'); return; }
+  const rec = new SR();
+  rec.lang = 'es-ES';
+  rec.interimResults = false;
+  rec.maxAlternatives = 1;
+  rec.onresult = (e) => {
+    const t = (e.results[0][0].transcript || '').trim();
+    document.getElementById('destVoice').value = t;
+    manualLogMsg('Voz reconocida: ' + t);
+  };
+  rec.onerror = (e) => manualLogMsg('Error de voz: ' + (e.error || e));
+  rec.onend = () => {};
+  try { rec.start(); manualLogMsg('Escuchando…'); } catch(err){ manualLogMsg('No se pudo iniciar voz: '+err.message); }
+}
+
+document.getElementById('btnLoadManual').addEventListener('click', loadManualImages);
+document.getElementById('btnMoveManual').addEventListener('click', moveManualCurrent);
+document.getElementById('btnSkipManual').addEventListener('click', skipManual);
+document.getElementById('btnMic').addEventListener('click', startVoiceDest);
+
+// ----- Duplicados perceptivos -----
+let dupGroups = [];
+let dupGroupIndex = 0;
+let dupSet = new Set();
+
+async function detectDuplicates(){
+  const folder = document.getElementById('folder').value.trim();
+  if(!folder){ alert('Indicá la carpeta'); return; }
+  const thr = document.getElementById('dupThreshold').value.trim() || '10';
+  const status = document.getElementById('dupStatus');
+  status.textContent = 'Calculando huellas perceptivas...';
+  document.getElementById('btnReviewDup').disabled = true;
+  try {
+    const r = await fetch('/api/duplicates', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({folder, threshold: thr})});
+    const data = await r.json();
+    if(data.error){ status.textContent = 'Error: '+data.error; return; }
+    dupGroups = data.groups || [];
+    dupSet = new Set();
+    for(const g of dupGroups) for(const img of g.images) dupSet.add(img.fullPath);
+    renderDupTable();
+    renderManualCurrent();
+    status.textContent = 'Analizadas ' + data.total + ' fotos. Grupos duplicados: ' + data.groupCount + '. Imágenes involucradas: ' + dupSet.size + '.';
+    document.getElementById('btnReviewDup').disabled = dupGroups.length === 0;
+  } catch(e){ status.textContent = 'Error: '+e.message; }
+}
+
+function renderDupTable(){
+  const tbody = document.getElementById('dupTableBody');
+  tbody.innerHTML = '';
+  dupGroups.forEach((g) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = '<td>Grupo ' + g.id + '</td><td>' + g.images.length + '</td><td>' + g.images.map(i=>escapeHtml(i.name)).join(', ') + '</td>';
+    tbody.appendChild(tr);
+  });
+}
+
+function startDupReview(){
+  if(dupGroups.length === 0){ alert('No hay grupos para revisar.'); return; }
+  dupGroupIndex = 0;
+  document.getElementById('dupReviewCard').style.display = 'block';
+  renderDupGroup();
+}
+
+function closeDupReview(){
+  document.getElementById('dupReviewCard').style.display = 'none';
+}
+
+function renderDupGroup(){
+  const info = document.getElementById('dupGroupInfo');
+  if(dupGroups.length === 0){ info.textContent = 'No quedan grupos para revisar.'; document.getElementById('dupImages').innerHTML=''; return; }
+  if(dupGroupIndex >= dupGroups.length) dupGroupIndex = 0;
+  if(dupGroupIndex < 0) dupGroupIndex = dupGroups.length - 1;
+  const g = dupGroups[dupGroupIndex];
+  info.textContent = 'Grupo ' + g.id + ' — ' + g.images.length + ' imagen(es). (' + (dupGroupIndex+1) + ' de ' + dupGroups.length + ')';
+  const cont = document.getElementById('dupImages');
+  cont.innerHTML = '';
+  for(const img of g.images){
+    const card = document.createElement('div');
+    card.style.cssText = 'flex:0 0 46%;max-width:520px;border:1px solid #2a2e3a;border-radius:10px;padding:8px;background:#13161d;';
+    const image = document.createElement('img');
+    image.src = '/api/file?path=' + encodeURIComponent(img.fullPath);
+    image.style.cssText = 'width:100%;height:360px;object-fit:contain;background:#000;border-radius:6px;';
+    const name = document.createElement('div');
+    name.className = 'status';
+    name.style.marginTop = '6px';
+    name.textContent = img.name;
+    const btns = document.createElement('div');
+    btns.style.cssText = 'margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;';
+    const bDel = document.createElement('button'); bDel.className='danger'; bDel.textContent='Eliminar';
+    bDel.addEventListener('click', async () => {
+      if(!confirm('¿Eliminar '+img.name+'? Esta acción no se puede deshacer.')) return;
+      try {
+        const r = await fetch('/api/delete-one', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({fullPath: img.fullPath})});
+        const d = await r.json();
+        if(d.error){ manualLogMsg('Error: '+d.error); return; }
+        manualLogMsg('Eliminado: '+img.name);
+        removeImageFromDupGroup(g, img.fullPath);
+        await loadManualImages();
+      } catch(e){ manualLogMsg('Error: '+e.message); }
+    });
+    const bMov = document.createElement('button'); bMov.className='secondary'; bMov.textContent='Mover';
+    bMov.addEventListener('click', async () => {
+      const dest = document.getElementById('dupDest').value.trim();
+      if(!dest){ alert('Indicá la carpeta destino.'); return; }
+      try {
+        const r = await fetch('/api/move-one', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({fullPath: img.fullPath, destName: dest})});
+        const d = await r.json();
+        if(d.error){ manualLogMsg('Error: '+d.error); return; }
+        manualLogMsg('Movido: '+img.name+' -> '+d.folder);
+        // Por defecto: las demas imagenes del grupo se eliminan
+        for(const other of g.images.filter(o => o.fullPath !== img.fullPath)){
+          try {
+            const rd = await fetch('/api/delete-one', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({fullPath: other.fullPath})});
+            const dd = await rd.json();
+            if(dd.error){ manualLogMsg('Error eliminando duplicado: '+dd.error); }
+            else { manualLogMsg('Eliminado duplicado: '+other.name); }
+          } catch(e){ manualLogMsg('Error: '+e.message); }
+        }
+        // Quitar grupo completo
+        for(const o of g.images) dupSet.delete(o.fullPath);
+        dupGroups = dupGroups.filter(x => x !== g);
+        if(dupGroupIndex >= dupGroups.length) dupGroupIndex = Math.max(0, dupGroups.length-1);
+        renderDupTable();
+        renderManualCurrent();
+        if(dupGroups.length === 0){
+          closeDupReview();
+          document.getElementById('btnReviewDup').disabled = true;
+        } else {
+          renderDupGroup();
+        }
+        await loadManualImages();
+      } catch(e){ manualLogMsg('Error: '+e.message); }
+    });
+    const bKeep = document.createElement('button'); bKeep.className='secondary'; bKeep.textContent='Conservar';
+    bKeep.addEventListener('click', () => { card.style.borderColor = '#3dd68c'; manualLogMsg('Conservado: '+img.name); });
+    btns.appendChild(bDel); btns.appendChild(bMov); btns.appendChild(bKeep);
+    card.appendChild(image); card.appendChild(name); card.appendChild(btns);
+    cont.appendChild(card);
+  }
+}
+
+function removeImageFromDupGroup(g, fullPath){
+  g.images = g.images.filter(i => i.fullPath !== fullPath);
+  dupSet.delete(fullPath);
+  if(g.images.length < 2){
+    dupGroups = dupGroups.filter(x => x !== g);
+    dupSet = new Set();
+    for(const gg of dupGroups) for(const i of gg.images) dupSet.add(i.fullPath);
+  }
+  if(dupGroupIndex >= dupGroups.length) dupGroupIndex = Math.max(0, dupGroups.length-1);
+  renderDupTable();
+  renderManualCurrent();
+  if(dupGroups.length === 0){
+    closeDupReview();
+    document.getElementById('btnReviewDup').disabled = true;
+  } else {
+    renderDupGroup();
+  }
+}
+
+document.getElementById('btnDetectDup').addEventListener('click', detectDuplicates);
+document.getElementById('btnReviewDup').addEventListener('click', startDupReview);
+document.getElementById('btnDupExit').addEventListener('click', closeDupReview);
+document.getElementById('btnDupPrev').addEventListener('click', () => { if(dupGroups.length>0){ dupGroupIndex = (dupGroupIndex - 1 + dupGroups.length) % dupGroups.length; renderDupGroup(); } });
+document.getElementById('btnDupNext').addEventListener('click', () => { if(dupGroups.length>0){ dupGroupIndex = (dupGroupIndex + 1) % dupGroups.length; renderDupGroup(); } });
+
+// marcar duplicados en vista manual
+const _origRenderManualCurrent = renderManualCurrent;
+// (renderManualCurrent ya consulta dupSet mediante variable global; se ajusta abajo)
+
+function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+</script>
+</body>
+</html>

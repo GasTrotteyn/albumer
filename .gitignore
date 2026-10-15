@@ -1,0 +1,9 @@
+node_modules/
+package-lock.json
+.cache/
+*.log
+.env
+.DS_Store
+Thumbs.db
+testimg/
+dupTest/
